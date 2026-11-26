@@ -17,6 +17,9 @@ public class Vessel {
     private String ownerName;
     @Column(name = "owner_phone")
     private String ownerPhone;
+    /** 船型（如 TRAWLER），用于船员船型权限核验 */
+    @Column(name = "vessel_type", nullable = false)
+    private String vesselType = "TRAWLER";
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -30,6 +33,8 @@ public class Vessel {
     public void setOwnerName(String ownerName) { this.ownerName = ownerName; }
     public String getOwnerPhone() { return ownerPhone; }
     public void setOwnerPhone(String ownerPhone) { this.ownerPhone = ownerPhone; }
+    public String getVesselType() { return vesselType; }
+    public void setVesselType(String vesselType) { this.vesselType = vesselType; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

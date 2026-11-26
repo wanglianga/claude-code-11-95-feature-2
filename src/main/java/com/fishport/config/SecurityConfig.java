@@ -44,11 +44,19 @@ public class SecurityConfig {
         http.csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // 模拟端（船舶终端/地磅/监管回执）与 API 文档开放
-                        .requestMatchers("/api/sim/**", "/swagger-ui/**", "/swagger-ui.html",
+                        // 模拟端（船舶终端/地磅/监管回执/闸口扫码/模拟时钟）与 API 文档开放
+                        .requestMatchers("/api/sim/**", "/api/crew/gate/scan", "/api/crew/sim/clock/**",
+                                "/swagger-ui/**", "/swagger-ui.html",
                                 "/v3/api-docs/**", "/actuator/health").permitAll()
                         // 写操作按角色
                         .requestMatchers(HttpMethod.POST, "/api/permit-applications").hasAnyRole("OWNER", "ADMIN")
+                        // N-5 名册：建档与船东决定（休息/替补/更正）仅船主
+                        .requestMatchers(HttpMethod.POST, "/api/crew/rosters",
+                                "/api/crew/voyages/*/keep-captain-rest", "/api/crew/voyages/*/substitute",
+                                "/api/crew/voyages/*/corrections").hasAnyRole("OWNER", "ADMIN")
+                        // N-5 离港窗登记与人员请假：港口调度/管理部门；接收方确认登录即可（actor 留痕）
+                        .requestMatchers(HttpMethod.POST, "/api/crew/departure-windows",
+                                "/api/crew/persons/*/active").hasAnyRole("DISPATCHER", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/voyages/*/depart", "/api/voyages/*/arrive",
                                 "/api/voyages/*/close").hasAnyRole("OWNER", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/voyages/*/unload-records").hasAnyRole("UNLOADER", "ADMIN")

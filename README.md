@@ -110,6 +110,46 @@ mvn test
 | FIXED | 06:30-07:10（提早到港仍等时段） | 07:15-07:35（A 结束 + 清场 5 分钟） |
 | ROLLING | 06:45-07:25（B 结束 + 清场 5 分钟） | 06:20-06:40（先到先卸） |
 
+### 6. 船员名册替换与投影确认（N-5）
+
+**场景**：当前船长证书有效但 09:00 还差两小时休息；替补船长 09:15 才到港、重签名册需 15 分钟；
+当前离港许可窗到 11:00，另一港窗口 12:00。船东两选一，两种选择都保留船东决定与通知回执，
+11:00 后原窗口不再显示为可用。
+
+**确认实现（二选一，本题只实现一套，无切换按钮）：字段投影绑定模型。**
+港口（PORT）、保险（INSURER）、应急联络（EMERGENCY）各持一个协议版本化（`projectionVersion=1.0`）
+的字段投影，投影内容用 SHA-256 哈希固化。重签时逐方比对：
+
+- 投影内容哈希与协议版本**逐项一致** → 旧确认沿用（`CONFIRMED` + `carriedFromAckId`），不打扰未受影响方；
+- 任一变化 → 旧确认置 `INVALIDATED` 并写**失效原因**，该方必须重新签认；
+- 严禁新名册配旧船长确认：修订号不同的确认永不直接放行；已作废（`SUPERSEDED`）修订拒绝再签认。
+
+投影字段（协议）：
+
+| 接收方 | 投影字段 | 应急电话 |
+| --- | --- | --- |
+| PORT 港口 | 航次/船/船型、人员、岗位、航次职责、证书号与有效期、船型权限、专项资质 | 不含 |
+| INSURER 保险 | 航次/船、人员、岗位、航次职责、证书号、专项资质（保险责任） | 不含 |
+| EMERGENCY 应急 | 航次/船、人员、岗位、航次职责、应急联系电话 | **含** |
+
+因此：**船长/岗位/航次身份变化 → 三方哈希全变，待重签 3 份**；
+**仅更正应急联系人电话 → 只应急方哈希变化，待重签 1 份、港口与保险各沿用 1 份**（整单模型此时会待重签 3 份）。
+两种模型都须所需确认齐备才能放行。
+
+替换与闸口规则：
+
+1. **替换申请五项核验**：岗位（同岗对位）、船型权限、证书有效期、休息达标时刻、航次职责，任一不过即驳回（`SUBSTITUTE_REJECTED`）；
+2. **离港闸按整份名册重核岗位覆盖**，不只查被替换的一行：当班船长唯一、人员不重复、证书/船型/休息逐人达标、
+   专项资质有人覆盖（唯一持 REEFER 冷藏设备资格的轮机员请假后换人，重签报 `ROSTER_COVERAGE_FAIL`）；
+3. **重签即撤销旧二维码**，新二维码在三方确认齐备、修订 `RELEASED` 后才签发；旧码再刷返回 `OLD_CREDENTIAL_REVOKED`；
+4. **闸口只接受当时有效版本**：凭证须指向当前修订、修订已放行、窗口未关；休息不足 `NOT_YET_RESTED`、窗口关闭 `WINDOW_CLOSED`；
+5. **离港后的迟到签到只留作核查**（`LATE_CHECKIN_RECORDED`），不回滚新名册；
+6. **待放行页面**：任何关键接收方未确认，状态显示待放行及责任接收方（工作台「名册待放行」），离港被 `ROSTER_NOT_RELEASED` 阻断。
+
+> 时间敏感场景用模拟时钟复现：`POST /api/crew/sim/clock` 固定到 09:00/09:30/11:00，`/reset` 恢复系统时钟。
+> 人员主档（证书/船型权限/资质/休息达标时刻）由 `CrewPersonSeeder` 经 JPA 写入，避免 SQL 字面量受
+> `hibernate.jdbc.time_zone` 平移。
+
 ## 四、API 概览
 
 | 模块 | 端点 |
@@ -121,15 +161,18 @@ mvn test
 | 争议 | `POST /api/disputes/{id}/resolve`、`GET /api/disputes?status=OPEN` |
 | 额度账 | `GET /api/quota-accounts`、`GET /api/quota-accounts/{id}/ledger` |
 | 工作台 | `GET /api/workbench/tasks`（按登录角色返回责任清单与下一步操作） |
+| 船员名册 N-5 | `POST /api/crew/rosters`、`POST /api/crew/voyages/{no}/keep-captain-rest|substitute|corrections`、`POST /api/crew/revisions/{no}/ack`、`POST /api/crew/departure-windows`、`POST /api/crew/gate/scan`、`GET /api/crew/voyages/{no}/roster|revisions|decisions|scans`、`GET /api/crew/revisions/{no}/acks`、`POST /api/crew/sim/clock` |
 | 模拟端 | `POST /api/sim/vessel-terminal/events`、`POST /api/sim/weighbridge/tickets`、`GET /api/sim/regulator/receipts`、`POST /api/sim/regulator/receipts/{no}/ack` |
 | 参考数据 | `GET /api/reference/areas|species|vessels|ports` |
 
 种子数据：海区 A1/A2；物种 COD 鳕鱼 / FLOUNDER 比目鱼 / HAIRTAIL 带鱼；A1 鳕鱼与比目鱼 05-01~08-31 禁渔、
 A1 禁用拖网 TRAWL；2026 年度额度账 5 个；船只 V001/V002/V003；港口 PORT1（06:00-20:00，清场 5 分钟，冷库 5000kg）。
+N-5 人员主档（`CrewPersonSeeder`，JPA 写入）：原船长 P-CAP-01（11:00 才休息达标）、替补船长 P-CAP-02（09:15 达标）、
+轮机员 P-ENG-01（唯一持 REEFER 冷藏设备资质）、P-ENG-02（无 REEFER）、船员 P-SAIL-01。
 
 ## 五、验证方式（本题）
 
-### 1. 自动化集成测试（已执行：`mvn test`，20 个测试全部通过）
+### 1. 自动化集成测试（已执行：`mvn test`，26 个测试全部通过）
 
 | 测试类 | 覆盖点 |
 | --- | --- |
@@ -137,6 +180,7 @@ A1 禁用拖网 TRAWL；2026 年度额度账 5 个；船只 V001/V002/V003；港
 | `VoyageLifecycleTest`（3） | A 船 300→280、B 船 100→90 全流程；重复到港/重传票据/重复签收幂等；重称差异 282→280 复称结案；零渔获结案全额释放；历史回放流水自洽 |
 | `ScheduleTest`（4） | 固定模式 A 06:30-07:10、B 07:15-07:35（清场占用）；滚动模式 B 06:20-06:40、A 06:45-07:25；迟到 07:30 改期队尾并通知；滚动重排改变已公布顺序并重新通知 |
 | `DisputeClosureTest`（3） | 混装争议阻断结案、客服备注不算执法事实、执法办结后放行；多物种零渔获释放；许可过期自动登记争议并阻断、办结后结案 |
+| `CrewRosterTest`（6） | 原船长按时满足休息赶当前窗最后时点、11:00 后窗口不可用；替补 09:30 准时重签赶上当前窗；替补迟到超窗+旧二维码再刷被拒+待放行责任；保险回执失败阻断离港、离港后迟到签到只留核查不回滚；仅改应急电话投影只失效 1 份（沿用 2 份）、旧修订不能再签认；唯一 REEFER 轮机员请假整名册资质覆盖失败 |
 | `SmokeTest`（3） | 上下文与 OpenAPI 文档；未认证 401；种子额度账 |
 
 ### 2. 手工冒烟（已执行：本地 `java -jar` 启动后 curl 全流程）
@@ -180,6 +224,46 @@ curl -X POST http://localhost:8080/api/sim/regulator/receipts/<回执号>/ack
 固定模式排定 A 06:30-07:10、B 07:15-07:35 → 地磅净重 280（重传幂等）→ 签收（重复签收幂等）→
 A1/COD 已用 280、保留 0（释放 20）→ 结案 → 回放 11 个事件、`ledgerConsistent=true` → 监管回执可确认。
 
+实际执行结论（2026-11-26，容器内）：许可批复 → 终端离港/返港（重复返港 `duplicate=true`）→
+固定模式排定 A 06:30-07:10、B 07:15-07:35 → 地磅净重 280（重传幂等）→ 签收（重复签收幂等）→
+A1/COD 已用 280、保留 0（释放 20）→ 结案 → 回放 11 个事件、`ledgerConsistent=true` → 监管回执可确认。
+
+### 3. N-5 手工冒烟（已执行：本地 `java -jar` 启动后 curl 全流程）
+
+```bash
+# 固定时钟到 09:00（模拟端免登录），申请许可后建初版名册并登记当前/另一港窗口
+curl -X POST http://localhost:8080/api/crew/sim/clock -H 'Content-Type: application/json' \
+  -d '{"at":"2026-11-26T09:00:00"}'
+curl -u owner:owner123 -X POST http://localhost:8080/api/crew/rosters -H 'Content-Type: application/json' -d '{
+  "voyageNo":"<航次号>","personNos":["P-CAP-01","P-ENG-01","P-SAIL-01"],
+  "requiredQualifications":["REEFER"]}'
+curl -u dispatcher:dispatcher123 -X POST http://localhost:8080/api/crew/departure-windows -H 'Content-Type: application/json' -d '{
+  "voyageNo":"<航次号>","portCode":"PORT1","kind":"CURRENT",
+  "windowFrom":"2026-11-26T08:00:00","windowTo":"2026-11-26T11:00:00"}'
+# 三方投影确认 → 取二维码 → 09:00 扫码被 NOT_YET_RESTED 拒绝
+for p in PORT INSURER EMERGENCY; do
+  curl -u owner:owner123 -X POST "http://localhost:8080/api/crew/revisions/<修订号>/ack?party=$p"; done
+curl -X POST http://localhost:8080/api/crew/gate/scan -H 'Content-Type: application/json' -d '{"qrCode":"<二维码>"}'
+
+# 选择一：11:00 原船长休息达标重签（投影逐项一致，reSignRequired=0、carried=3）
+curl -X POST http://localhost:8080/api/crew/sim/clock -H 'Content-Type: application/json' -d '{"at":"2026-11-26T11:00:00"}'
+curl -u owner:owner123 -X POST http://localhost:8080/api/crew/voyages/<航次号>/keep-captain-rest -d '{"reason":"休息满两小时"}'
+
+# 选择二：09:30 启用替补（五项核验通过，三方确认全失效 reSignRequired=3、旧码撤销）
+curl -u owner:owner123 -X POST http://localhost:8080/api/crew/voyages/<航次号>/substitute -H 'Content-Type: application/json' -d '{
+  "replacementPersonNo":"P-CAP-02","reason":"启用替补赶当前窗"}'
+
+# 仅更正应急电话：投影模型只 1 份待签、2 份沿用（整单模型此时为 3 份）
+curl -u owner:owner123 -X POST http://localhost:8080/api/crew/voyages/<航次号>/corrections -H 'Content-Type: application/json' -d '{
+  "emergencyPhones":{"P-SAIL-01":"13711112222"},"reason":"更正应急电话"}'
+```
+
+实际执行结论（2026-11-26，容器内）：09:00 扫码 `NOT_YET_RESTED`；11:00 原船长重签 `pending=0/carried=3`、
+当点扫码 `PASS`，11:01 扫码 `WINDOW_CLOSED`，旧码 `OLD_CREDENTIAL_REVOKED`；09:00 替补 422、09:30 替补
+`pending=3/carried=0`；保险未确认时离港 409 `ROSTER_NOT_RELEASED`；离港后扫码 `LATE_CHECKIN_RECORDED` 且
+新名册不回滚；改电话 `pending=2/carried=1`（前一版保险本就未确认），港口确认 `carriedFrom` 非空；
+REEFER 轮机员请假换人重签 422 `ROSTER_COVERAGE_FAIL`。
+
 > 说明：本容器无 Docker 守护进程，`docker compose up --build` 未在本环境实际执行；
 > Dockerfile 与 Compose 配置已静态核对，应用本体以上述 `mvn test`（20/20 通过）与本地 jar 运行冒烟验证。
 
@@ -191,12 +275,13 @@ A1/COD 已用 280、保留 0（释放 20）→ 结案 → 回放 11 个事件、
 └── src
     ├── main/java/com/fishport
     │   ├── config/    安全（Basic+角色）、OpenAPI、全局异常
-    │   ├── domain/    21 张表实体与枚举（许可/航次/额度账/预约/争议/回执…）
-    │   ├── repo/      Spring Data JPA 仓库（额度账悲观锁、航次行锁）
-    │   ├── service/   许可校验、航次状态机、额度账、双模式调度、回放、工作台
-    │   └── web/       REST 控制器（含 /api/sim 模拟端）
+    │   ├── domain/    实体与枚举（许可/航次/额度账/预约/争议/回执/名册修订/投影回执/闸口凭证/离港窗…）
+    │   ├── repo/      Spring Data JPA 仓库（额度账悲观锁、航次行锁、名册版本行锁、二维码行锁）
+    │   ├── service/   许可校验、航次状态机、额度账、双模式调度、回放、工作台、
+    │   │              CrewRosterService（N-5 名册替换/投影确认/闸口）、SimClock、CrewPersonSeeder
+    │   └── web/       REST 控制器（含 /api/sim 模拟端、/api/crew 名册端）
     ├── main/resources
     │   ├── application.yml
-    │   └── db/migration/  V1__init.sql（建表）+ V2__seed.sql（种子数据）
-    └── test/java/com/fishport/  20 个集成测试（连 ccdev_test 库）
+    │   └── db/migration/  V1__init.sql、V2__seed.sql、V3__crew_roster.sql（N-5 名册表结构）
+    └── test/java/com/fishport/  26 个集成测试（连 ccdev_test 库，含 CrewRosterTest 6 个 N-5 场景）
 ```

@@ -20,15 +20,17 @@ public class WorkbenchService {
     private final DisputeRepository disputeRepo;
     private final AppointmentRepository appointmentRepo;
     private final VesselRepository vesselRepo;
+    private final CrewRosterService crewRosterService;
 
     public WorkbenchService(VoyageRepository voyageRepo, UnloadRecordRepository recordRepo,
                             DisputeRepository disputeRepo, AppointmentRepository appointmentRepo,
-                            VesselRepository vesselRepo) {
+                            VesselRepository vesselRepo, CrewRosterService crewRosterService) {
         this.voyageRepo = voyageRepo;
         this.recordRepo = recordRepo;
         this.disputeRepo = disputeRepo;
         this.appointmentRepo = appointmentRepo;
         this.vesselRepo = vesselRepo;
+        this.crewRosterService = crewRosterService;
     }
 
     public record TaskItem(String category, String reference, String responsibility, String nextAction) {
@@ -64,6 +66,11 @@ public class WorkbenchService {
             tasks.add(new TaskItem("航次", v.getVoyageNo() + "（船 " + vesselNo + "，状态 " + v.getState() + "）",
                     "跟踪本航次进度", next));
         }
+        // N-5：船东看待放行名册及责任接收方，负责催办
+        for (var t : crewRosterService.pendingReleaseTasks()) {
+            tasks.add(new TaskItem("名册待放行", String.valueOf(t.get("revisionNo")),
+                    String.valueOf(t.get("responsibility")), String.valueOf(t.get("nextAction"))));
+        }
         return tasks;
     }
 
@@ -83,6 +90,11 @@ public class WorkbenchService {
             };
             tasks.add(new TaskItem("预约", a.getAppointmentNo() + "（" + a.getMode() + "）",
                     "维护卸货线排队与通知", next));
+        }
+        // N-5：港口调度看待放行名册，港口方未确认时责任在港口
+        for (var t : crewRosterService.pendingReleaseTasks()) {
+            tasks.add(new TaskItem("名册待放行", String.valueOf(t.get("revisionNo")),
+                    String.valueOf(t.get("responsibility")), String.valueOf(t.get("nextAction"))));
         }
         return tasks;
     }

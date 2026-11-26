@@ -29,13 +29,14 @@ public class VoyageService {
     private final VoyageEventRepository eventRepo;
     private final QuotaService quotaService;
     private final RegulatorService regulatorService;
+    private final CrewRosterService crewRosterService;
     private final PlatformTransactionManager txManager;
 
     public VoyageService(VoyageRepository voyageRepo, PermitRepository permitRepo,
                          UnloadRecordRepository recordRepo, WeighTicketRepository ticketRepo,
                          DisputeRepository disputeRepo, VoyageEventRepository eventRepo,
                          QuotaService quotaService, RegulatorService regulatorService,
-                         PlatformTransactionManager txManager) {
+                         CrewRosterService crewRosterService, PlatformTransactionManager txManager) {
         this.voyageRepo = voyageRepo;
         this.permitRepo = permitRepo;
         this.recordRepo = recordRepo;
@@ -44,6 +45,7 @@ public class VoyageService {
         this.eventRepo = eventRepo;
         this.quotaService = quotaService;
         this.regulatorService = regulatorService;
+        this.crewRosterService = crewRosterService;
         this.txManager = txManager;
     }
 
@@ -62,6 +64,8 @@ public class VoyageService {
         if (permit.expiredAt(LocalDateTime.now())) {
             throw BizException.conflict("PERMIT_EXPIRED", "许可证已过有效期，不得离港");
         }
+        // N-5：离港必须持已放行且整份名册核验达标的船员版本（待放行/休息不足/资质缺口均阻断）
+        crewRosterService.assertDepartureReady(voyage);
         voyage.setState(Types.VoyageState.DEPARTED);
         voyage.setDepartedAt(LocalDateTime.now());
         voyageRepo.save(voyage);

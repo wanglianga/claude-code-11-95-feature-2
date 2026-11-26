@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /** 请求 DTO 汇总 */
 public final class Requests {
@@ -70,5 +71,45 @@ public final class Requests {
 
     /** 模拟船舶终端事件 */
     public record TerminalEventRequest(@NotBlank String voyageNo, @NotBlank String eventType, String eventId) {
+    }
+
+    /** N-5 初版名册 */
+    public record InitRosterRequest(@NotBlank String voyageNo,
+                                    @NotNull List<@NotBlank String> personNos,
+                                    List<String> requiredQualifications,
+                                    String reason) {
+    }
+
+    /** N-5 船东决定（原船长休息 / 启用替补 / 更正通用理由） */
+    public record RosterDecisionRequest(String reason) {
+    }
+
+    /** N-5 启用替补 */
+    public record SubstituteRequest(@NotBlank String replacementPersonNo, String reason) {
+    }
+
+    /** N-5 名册更正：可给整份新人员清单（如轮机员请假换人），可覆盖应急电话 */
+    public record RosterCorrectionRequest(List<String> personNos,
+                                          Map<String, String> emergencyPhones,
+                                          String reason) {
+    }
+
+    /** N-5 离港窗登记 */
+    public record DepartureWindowRequest(@NotBlank String voyageNo, @NotBlank String portCode,
+                                         @NotBlank String kind,
+                                         @NotNull LocalDateTime windowFrom,
+                                         @NotNull LocalDateTime windowTo) {
+    }
+
+    /** N-5 闸口扫码 */
+    public record GateScanRequest(@NotBlank String qrCode) {
+    }
+
+    /** N-5 模拟时钟固定 */
+    public record ClockRequest(@NotNull LocalDateTime at) {
+    }
+
+    /** N-5 人员请假/复职 */
+    public record PersonLeaveRequest(boolean active) {
     }
 }
